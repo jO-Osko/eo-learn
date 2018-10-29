@@ -2,7 +2,7 @@ import unittest
 
 from eolearn.core import EOPatch, FeatureType
 from eolearn.features import AddMaxMinNDVISlopeIndicesTask, AddMaxMinTemporalIndicesTask,\
-    AddSpatioTemporalFeaturesTask
+    AddSpatioTemporalFeaturesTask, AddStreamTemporalFeaturesTask
 
 from datetime import date, timedelta
 
@@ -62,6 +62,91 @@ class TestTemporalFeaturesTasks(unittest.TestCase):
         new_eopatch = add_bands(eopatch)
         self.assertTrue(np.array_equal(new_eopatch.data_timeless['ARGMIN_B1'], np.zeros((h, w, 1))))
         self.assertTrue(np.array_equal(new_eopatch.data_timeless['ARGMAX_B1'], (t-1)*np.ones((h, w, 1))))
+
+    def test_stream_temporal_indices(self):
+        """ Test case for aggregate temporal indices of custom band
+
+        Tests are preformed on a hand built single pixel image with hand calculated values.
+        """
+        days_delta = 10
+
+        timestamp = list(perdelta(date(2018, 3, 1), date(2018, 10, 1), timedelta(days=days_delta)))
+
+        # Normalize to [-1,1] (range of usual eo-indices)
+        data = np.array([
+            [
+                [0, 1, 3, 0, -2, 1, 3, 5, 7, 7.8, 8, 8.2, 8.1, 7.9, 5, 3, 1, -3, -0.5, 1],
+            ],
+        ]) / 10
+        h, w, t = data.shape
+
+        data_shape = (t, h, w, 1)
+        valid_data = np.ones(data_shape)
+        data_name = "NDVI"
+        data = data[..., np.newaxis]
+        # Fill
+        eopatch = EOPatch(timestamp=timestamp)
+        eopatch.add_feature(FeatureType.DATA, data_name, data.swapaxes(0, 2).swapaxes(1, 2))
+        eopatch.add_feature(FeatureType.MASK, 'IS_DATA', valid_data)
+        eopatch.add_feature(FeatureType.MASK, 'VALID_DATA', valid_data)
+
+        add_features = AddStreamTemporalFeaturesTask(data_feature=data_name, mask_data=True, interval_tolerance=0.1,
+                                                     window_size=2)
+        new_eopatch = add_features(eopatch)
+
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.max_val_feature], np.array([[[8.2]]])/10))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.min_val_feature], np.array([[[-3]]])/10))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.mean_val_feature], np.array([[[3.225]]])/10))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.sd_val_feature], np.array([[[3.57308]]])/10))
+
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.diff_max_feature], np.array([[[4]]])/10))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.diff_min_feature], np.array([[[0.1]]])/10))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.diff_diff_feature], np.array([[[3.9]]])/10))
+
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.max_mean_feature], np.array([[[8.15]]])/10))
+
+        # 8.15 * 0.9 ~ 7.4
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.max_mean_len_feature],
+                                    np.array([[[days_delta * 4]]])))
+        # [7.8, 8, 8.2, 8.1, 7.9]
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.max_mean_surf_feature],
+                                    np.array([[[72.15]]])))
+
+        # From -2 to 8.2
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.pos_len_feature],
+                                    np.array([[[days_delta * 7]]])))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.pos_surf_feature],
+                                    np.array([[[104.9]]])))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.pos_rate_feature],
+                                    np.array([[[(8.2 - -2)/(days_delta*7*10)]]])))
+
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.neg_len_feature],
+                                    np.array([[[days_delta * 5]]])))
+
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.neg_surf_feature],
+                                    np.array([[[69.45]]])))
+        self.assertTrue(np.allclose(new_eopatch.data_timeless[add_features.neg_rate_feature],
+                                    np.array([[[(-3 - 8.1)/(days_delta*5*10)]]])))
+
+        self.assertTrue(np.all(new_eopatch.data_timeless[add_features.pos_transition_feature] == np.array([[[1]]])))
+        self.assertTrue(np.all(new_eopatch.data_timeless[add_features.neg_transition_feature] == np.array([[[1]]])))
+
+        add_features = AddStreamTemporalFeaturesTask(data_feature=data_name, mask_data=True, interval_tolerance=0.1,
+                                                     window_size=3)
+        new_eopatch_sl3 = add_features(eopatch)
+
+        # 3, -3
+        self.assertTrue(np.allclose(new_eopatch_sl3.data_timeless[add_features.diff_max_feature],
+                                    np.array([[[6]]]) / 10))
+        # 8.0, 8.2
+        self.assertTrue(np.allclose(new_eopatch_sl3.data_timeless[add_features.diff_min_feature],
+                                    np.array([[[0.2]]])/10))
+        # 5.8
+        self.assertTrue(np.allclose(new_eopatch_sl3.data_timeless[add_features.diff_diff_feature],
+                                    np.array([[[5.8]]])/10))
+        # [8, 8.2, 8.1]
+        self.assertTrue(np.allclose(new_eopatch_sl3.data_timeless[add_features.max_mean_feature],
+                                    np.array([[[8.1]]])/10))
 
     def test_ndvi_slope_indices(self):
         """ Test case for computation of argmax/argmin of NDVI slope
