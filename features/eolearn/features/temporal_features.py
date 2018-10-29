@@ -264,7 +264,9 @@ class AddMaxMinNDVISlopeIndicesTask(EOTask):
 
         return eopatch
 
+
 class AddStreamTemporalFeaturesTask(EOTask):
+    # pylint: disable=too-many-instance-attributes
     """ Task that implements and adds to eopatch the spatio-temporal features proposed in [1].
 
 
@@ -347,6 +349,7 @@ class AddStreamTemporalFeaturesTask(EOTask):
         :param ndvi_barren_soil_cutoff: Cutoff for bare soil detection
         :type ndvi_barren_soil_cutoff: 0.1
         """
+        # pylint: disable=too-many-locals
 
         self.data_feature = data_feature
         self.data_index = data_index or 0
@@ -393,6 +396,8 @@ class AddStreamTemporalFeaturesTask(EOTask):
         """
         # pylint: disable=invalid-name
         # pylint: disable=too-many-locals
+        # pylint: disable=too-many-statements
+
         if self.mask_data:
             valid_data_mask = eopatch.mask['VALID_DATA']
             #valid_data_mask = eopatch.mask[self.mask_data]
