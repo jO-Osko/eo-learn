@@ -1,0 +1,12 @@
+version: '3.2'
+services:
+  eolearn:
+    image: "j00sko/eolearn"
+    ports:
+      - "3030:3000"
+      - "3080:5000"
+      - "3081:5001"
+    volumes:
+      - type: bind
+        source: ../../
+        target: /home/eolearn/
