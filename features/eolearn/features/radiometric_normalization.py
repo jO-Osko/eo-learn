@@ -1,7 +1,10 @@
-# Basic EOLearn libraries
-from eolearn.core import EOTask, FeatureType
+"""
+Module for radiometric normalization
+"""
 
 import numpy as np
+
+from eolearn.core import EOTask, FeatureType
 
 
 class ReferenceScenes(EOTask):
@@ -36,11 +39,11 @@ class ReferenceScenes(EOTask):
         valid_frac = list(eopatch[valid_fraction_feature_type][valid_fraction_feature_name].flatten())
         data = eopatch[feature_type][feature_name]
 
-        self.number = data.shape[0] if self.number is None else self.number
+        number = data.shape[0] if self.number is None else self.number
 
         eopatch[feature_type][new_feature_name] = np.array([data[x] for _, x in
                                                             sorted(zip(valid_frac, range(data.shape[0])), reverse=True)
-                                                            if x <= self.number-1])
+                                                            if x <= number-1])
 
         return eopatch
 

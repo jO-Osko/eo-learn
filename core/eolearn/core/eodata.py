@@ -3,28 +3,34 @@ The eodata module provides core objects for handling remotely sensing multi-temp
 """
 
 import os
+import sys
 import logging
 import pickle
-import numpy as np
 import gzip
 import shutil
 import warnings
-import attr
+import copy
 import datetime
+import pickletools
+
+import attr
 import dateutil.parser
+import numpy as np
+import geopandas as gpd
 
-from copy import copy, deepcopy
-from geopandas import GeoDataFrame, GeoSeries
-
-from sentinelhub import BBox
+import sentinelhub
 
 from .constants import FeatureType, FileFormat, OverwritePermission
 from .utilities import deep_eq, FeatureParser
 
-
+# pylint: disable=too-many-lines
 LOGGER = logging.getLogger(__name__)
 
 MAX_DATA_REPR_LEN = 100
+
+
+if sentinelhub.__version__ >= '2.5.0':
+    sys.modules['sentinelhub.common'] = sentinelhub.geometry
 
 
 @attr.s(repr=False, cmp=False, kw_only=True)
@@ -83,10 +89,10 @@ class EOPatch:
             return value if isinstance(value, _FeatureDict) else _FeatureDict(value, feature_type)
 
         if feature_type is FeatureType.BBOX:
-            if value is None or isinstance(value, BBox):
+            if value is None or isinstance(value, sentinelhub.BBox):
                 return value
             if isinstance(value, (tuple, list)) and len(value) == 5:
-                return BBox(value[:4], crs=value[4])
+                return sentinelhub.BBox(value[:4], crs=value[4])
 
         if feature_type is FeatureType.TIMESTAMP:
             if isinstance(value, (tuple, list)):
@@ -166,7 +172,7 @@ class EOPatch:
         """
         if isinstance(value, np.ndarray):
             return '{}(shape={}, dtype={})'.format(EOPatch._repr_value_class(value), value.shape, value.dtype)
-        if isinstance(value, GeoDataFrame):
+        if isinstance(value, gpd.GeoDataFrame):
             return '{}(columns={}, length={}, crs={})'.format(EOPatch._repr_value_class(value), list(value),
                                                               len(value), value.crs['init'])
         if isinstance(value, (list, tuple, dict)) and value:
@@ -207,7 +213,7 @@ class EOPatch:
         new_eopatch = EOPatch()
         for feature_type, feature_name in FeatureParser(features)(self):
             if feature_name is ...:
-                new_eopatch[feature_type] = copy(self[feature_type])
+                new_eopatch[feature_type] = copy.copy(self[feature_type])
             else:
                 new_eopatch[feature_type][feature_name] = self[feature_type][feature_name]
         return new_eopatch
@@ -225,7 +231,7 @@ class EOPatch:
 
         new_eopatch = self.__copy__(features=features)
         for feature_type in FeatureType:
-            new_eopatch[feature_type] = deepcopy(new_eopatch[feature_type], memo)
+            new_eopatch[feature_type] = copy.deepcopy(new_eopatch[feature_type], memo)
 
         return new_eopatch
 
@@ -256,6 +262,30 @@ class EOPatch:
         self._check_if_dict(feature_type)
         self[feature_type][feature_name] = value
 
+    def rename_feature(self, feature_type, feature_name, new_feature_name):
+        """Renames the feature ``feature_name`` to ``new_feature_name`` from dictionary of ``feature_type``.
+
+        :param feature_type: Enum of the attribute we're about to rename
+        :type feature_type: FeatureType
+        :param feature_name: Name of the feature of the attribute
+        :type feature_name: str
+        :param new_feature_name : New Name of the feature of the attribute
+        :type feature_name: str
+        """
+
+        self._check_if_dict(feature_type)
+        if feature_name != new_feature_name:
+            if feature_name in self[feature_type]:
+                LOGGER.debug("Renaming feature '%s' from attribute '%s' to '%s'",
+                             feature_name, feature_type.value, new_feature_name)
+                self[feature_type][new_feature_name] = self[feature_type][feature_name]
+                del self[feature_type][feature_name]
+            else:
+                raise BaseException("Feature {} from attribute {} does not exist!".format(
+                    feature_name, feature_type.value))
+        else:
+            LOGGER.debug("Feature '%s' was not renamed because new name is identical.", feature_name)
+
     @staticmethod
     def _check_if_dict(feature_type):
         """Checks if the given feature type contains a dictionary and raises an error if it doesn't.
@@ -283,6 +313,10 @@ class EOPatch:
             self[feature_type] = []
 
     def set_bbox(self, new_bbox):
+        """
+        :param new_bbox: new bbox
+        :type: new_bbox: BBox
+        """
         self.bbox = new_bbox
 
     def set_timestamp(self, new_timestamp):
@@ -398,9 +432,9 @@ class EOPatch:
                 eopatch_content[feature_type.value] = eopatch1[feature_type] + eopatch2[feature_type]
             else:
                 if not eopatch1[feature_type] or deep_eq(eopatch1[feature_type], eopatch2[feature_type]):
-                    eopatch_content[feature_type.value] = copy(eopatch2[feature_type])
+                    eopatch_content[feature_type.value] = copy.copy(eopatch2[feature_type])
                 elif not eopatch2[feature_type]:
-                    eopatch_content[feature_type.value] = copy(eopatch1[feature_type])
+                    eopatch_content[feature_type.value] = copy.copy(eopatch1[feature_type])
                 else:
                     raise ValueError('Could not merge {} feature because values differ'.format(feature_type))
 
@@ -803,10 +837,10 @@ class _FeatureDict(dict):
             return value
 
         if self.is_vector:
-            if isinstance(value, GeoSeries):
-                value = GeoDataFrame(dict(geometry=value), crs=value.crs)
+            if isinstance(value, gpd.GeoSeries):
+                value = gpd.GeoDataFrame(dict(geometry=value), crs=value.crs)
 
-            if isinstance(value, GeoDataFrame):
+            if isinstance(value, gpd.GeoDataFrame):
                 if self.feature_type is FeatureType.VECTOR:
                     if FeatureType.TIMESTAMP.value.upper() not in value:
                         raise ValueError("{} feature has to contain a column 'TIMESTAMP' with "
@@ -815,7 +849,7 @@ class _FeatureDict(dict):
                 return value
 
             raise ValueError('{} feature works with data of type {}, parsing data type {} is not supported'
-                             'given'.format(self.feature_type, GeoDataFrame.__name__, type(value)))
+                             'given'.format(self.feature_type, gpd.GeoDataFrame.__name__, type(value)))
 
         return value
 
@@ -849,9 +883,38 @@ class _FileLoader:
         """
         return os.path.join(self.patch_path, self.filename)
 
+    @staticmethod
+    def _correctly_load_bbox(bbox, path, is_zipped=False):
+        """ Helper method for loading old version of pickled BBox object
+
+        :param bbox: BBox object which was incorrectly loaded with pickle
+        :type bbox: sentinelhub.BBox
+        :param path: Path to file where BBox object is stored
+        :type path: str
+        :param is_zipped: `True` if file is zipped and `False` otherwise
+        :type is_zipped: bool
+        :return: Correctly loaded BBox object
+        :rtype: sentinelhub.BBox
+        """
+        warnings.warn("Bounding box of your EOPatch is saved in old format which in the future won't be supported "
+                      "anymore. Please save bounding box again, you can overwrite the existing one", DeprecationWarning,
+                      stacklevel=4)
+
+        with open(gzip.open(path) if is_zipped else path, 'rb') as pickle_file:
+            crs_cnt = -1
+            for _, arg, _ in pickletools.genops(pickle_file):
+                if arg == 'sentinelhub.constants CRS':
+                    crs_cnt = 2
+                if crs_cnt == 0:
+                    return sentinelhub.BBox(tuple(bbox), sentinelhub.CRS(arg))
+                crs_cnt -= 1
+
+        raise ValueError('Failed to correctly load BBox object, try downgrading sentinelhub package to <=2.4.7')
+
     def load(self):
         """ Method which loads data from the file
         """
+        # pylint: disable=too-many-return-statements
         if not os.path.isdir(self.patch_path):
             raise OSError('EOPatch does not exist in path {} anymore'.format(self.patch_path))
 
@@ -863,7 +926,11 @@ class _FileLoader:
 
         if not file_formats or file_formats[-1] is FileFormat.PICKLE:
             with open(path, "rb") as infile:
-                return pickle.load(infile)
+                data = pickle.load(infile)
+
+                if isinstance(data, sentinelhub.BBox) and not hasattr(data, 'crs'):
+                    return self._correctly_load_bbox(data, path)
+                return data
 
         if file_formats[-1] is FileFormat.NPY:
             if self.mmap:
@@ -875,7 +942,11 @@ class _FileLoader:
                 return np.load(gzip.open(path))
 
             if len(file_formats) == 1 or file_formats[-2] is FileFormat.PICKLE:
-                return pickle.load(gzip.open(path))
+                data = pickle.load(gzip.open(path))
+
+                if isinstance(data, sentinelhub.BBox) and not hasattr(data, 'crs'):
+                    return self._correctly_load_bbox(data, path, is_zipped=True)
+                return data
 
         raise ValueError('Could not load data from unsupported file format {}'.format(file_formats[-1]))
 
