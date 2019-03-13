@@ -22,10 +22,17 @@ def derivative_features(mask, valid_dates, data, base_surface_min):
     snd_der = np.where(down_mask[1:])[0]
     der_ind_max = -1
     der_int_max = -1
+    # cumsums = np.zeros_like(data)
+    # means = np.mean(rolling_window(data, 2), axis=1) - base_surface_min
+    # cumsums[1:] = np.cumsum(means*np.diff(valid_dates))
+
     for ind, (start, end) in enumerate(zip(fst_der, snd_der)):
+
+        # vo = cumsums[end] - cumsums[start]
         integral = np.trapz(
             data[start:end + 1] - base_surface_min,
             valid_dates[start:end+1])
+
         if abs(integral) >= abs(der_int_max):
             der_int_max = integral
             der_ind_max = ind
@@ -400,15 +407,10 @@ class AddStreamTemporalFeaturesTask(EOTask):
         # pylint: disable=too-many-locals
         # pylint: disable=too-many-statements
 
-        if self.mask_data:
-            valid_data_mask = eopatch.mask['VALID_DATA']
-            #valid_data_mask = eopatch.mask[self.mask_data]
-        else:
-            valid_data_mask = eopatch.mask['IS_DATA']
-
         all_dates = np.asarray([x.toordinal() for x in eopatch.timestamp])
 
         data = eopatch.data[self.data_feature][..., self.data_index]
+        valid_data_mask = np.ones_like(data)
 
         if data.ndim == 3:
             _, h, w = data.shape
@@ -418,10 +420,10 @@ class AddStreamTemporalFeaturesTask(EOTask):
         madata = np.ma.array(data, dtype=np.float32, mask=~valid_data_mask.astype(np.bool))
 
         # Vectorized
-        data_max_val = np.ma.MaskedArray.max(madata, axis=0)
-        data_min_val = np.ma.MaskedArray.min(madata, axis=0)
-        data_mean_val = np.ma.MaskedArray.mean(madata, axis=0)
-        data_sd_val = np.ma.MaskedArray.std(madata, axis=0)
+        data_max_val = np.ma.MaskedArray.max(madata, axis=0).filled()
+        data_min_val = np.ma.MaskedArray.min(madata, axis=0).filled()
+        data_mean_val = np.ma.MaskedArray.mean(madata, axis=0).filled()
+        data_sd_val = np.ma.MaskedArray.std(madata, axis=0).filled()
 
         data_diff_max = np.empty((h, w))
         data_diff_min = np.empty((h, w))
@@ -441,12 +443,12 @@ class AddStreamTemporalFeaturesTask(EOTask):
 
         data_pos_tr = np.empty((h, w))
         data_neg_tr = np.empty((h, w))
-        for ih, iw in itertools.product(range(h), range(w)):
+        for ih, iw in it.product(range(h), range(w)):
             data_curve = madata[:, ih, iw]
             valid_idx = np.where(~madata.mask[:, ih, iw])[0]
 
-            data_curve = data_curve[valid_idx]
-            assert not np.any(np.isnan(data_curve))
+            data_curve = data_curve[valid_idx].filled()
+
             valid_dates = all_dates[valid_idx]
 
             sw_max = np.max(rolling_window(data_curve, self.window_size), -1)
