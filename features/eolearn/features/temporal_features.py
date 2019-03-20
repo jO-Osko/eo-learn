@@ -467,7 +467,7 @@ class AddStreamTemporalFeaturesTask(EOTask):
             # Calculate max mean interval
             # Work with mean windowed or whole set?
             workset = data_curve  # or sw_mean, which is a bit more smoothed
-            higher_mask = workset >= ((1-self.interval_tolerance) * max_mean)
+            higher_mask = workset >= max_mean - ((1-self.interval_tolerance) * abs(max_mean))
 
             # Just normalize to have 0 on each side
             higher_mask_norm = np.zeros(len(higher_mask) + 2)
@@ -557,3 +557,31 @@ class AddStreamTemporalFeaturesTask(EOTask):
         eopatch.data_timeless[self.neg_transition_feature] = data_neg_tr[..., np.newaxis]
 
         return eopatch
+
+    def get_data(self, patch):
+        names = [self.max_val_feature, self.min_val_feature, self.mean_val_feature, self.sd_val_feature,
+                 self.diff_max_feature, self.diff_min_feature, self.diff_diff_feature,
+                 self.max_mean_feature, self.max_mean_len_feature, self.max_mean_surf_feature,
+                 self.pos_len_feature, self.pos_surf_feature, self.pos_rate_feature, self.pos_transition_feature,
+                 self.neg_len_feature, self.neg_surf_feature, self.neg_rate_feature, self.neg_transition_feature]
+
+        m, n, _ = patch.data_timeless[names[0]].shape
+
+        data = np.zeros((m, n, len(names)))
+        for ind, name in enumerate(names):
+            data[..., ind] = patch.data_timeless[name].squeeze()
+
+        return names, data
+
+
+def concatenate(eopatch, tasks):
+    rtr_names = []
+    rtr_data = []
+
+    for task in tasks:
+        names, data = task.get_data(eopatch)
+        rtr_names.extend(names)
+        rtr_data.append(data)
+
+    return rtr_names, np.concatenate(rtr_data, 2)
+
