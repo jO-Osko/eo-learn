@@ -3,6 +3,7 @@ from enum import Enum
 import cv2 as cv
 import numpy as np
 from eolearn.core import EOTask, FeatureType
+from scipy import signal
 
 
 class AdaptiveThresholdMethod(Enum):
@@ -118,7 +119,7 @@ class Thresholding(EOTask):
         img_true_color = cv.cvtColor(img_true_color[..., self.rgb_indices], cv.COLOR_BGR2RGB)
         img_grayscale = (cv.cvtColor(img_true_color.copy(), cv.COLOR_RGB2GRAY) * 255).astype(np.uint8)
 
-        img_true_color = np.clip(img_true_color*self.correction_factor, 0, 1)
+        img_true_color = np.clip(img_true_color * self.correction_factor, 0, 1)
 
         img2 = img_true_color
 
@@ -208,3 +209,176 @@ class Bluring:
             self.img = cv.GaussianBlur(self.img, self.gKsize, self.sigmaX,
                                        self.sigmaY, self.borderType)
         return self.img
+
+
+class EdgeDetection(EOTask):
+
+    def __init__(self, feature, operator, index=0, sub_index=None,
+                 to_grayscale=False, convolve_args=None):
+        """
+
+        :param feature: Name of feature to perform edge detection on, with optional new feature name
+        :type feature: (FeatureType, str) or (FeatureType, str, str)
+        :param operator: Tuple of x and y wise derivative operator. Each operator is square matrix
+        :type operator (ndarray, ndarray)
+        """
+        self.feature = self._parse_features(feature, new_names=True,
+                                            default_feature_type=FeatureType.DATA)
+        self.index = index
+        self.sub_index = sub_index
+        self.to_grayscale = to_grayscale
+        self.operator = operator
+
+        self.convolve_args = convolve_args or {"mode": "same"}
+
+    def execute(self, eopatch):
+
+        feature_type, feature_name, new_feature_name = next(
+            self.feature(eopatch))
+
+        image = eopatch[feature_type][feature_name][self.index]
+
+        if self.sub_index:
+            image = image[..., self.sub_index]
+
+        # Convert to grayscale
+        if self.to_grayscale:
+            image = np.dot(image[..., :], [0.2989, 0.5870, 0.1140])
+
+        magnitude, angle = self.calculate_mask(image)
+
+        eopatch.mask_timeless[new_feature_name + "_EDGES"] = np.concatenate(
+            (np.expand_dims(magnitude, -1), np.expand_dims(angle, -1)), axis=-1)
+
+        return eopatch
+
+    def calculate_mask(self, image):
+        # Implement different combining techniques
+        gradients = [
+            self.apply_operator(image, p_operator) for p_operator in
+            self.operator
+        ]
+
+        magnitude = np.sqrt(sum(np.square(grad) for grad in gradients))
+        magnitude = magnitude / np.max(np.abs(magnitude))
+        angle = np.arctan2(gradients[1], gradients[0])
+
+        return magnitude, angle
+
+    def apply_operator(self, img, operator):
+        return signal.convolve2d(img.squeeze(), operator, **self.convolve_args)
+
+
+class SobelOperator(EdgeDetection):
+
+    Gx = np.array([[-1, 0, 1],
+                   [-2, 0, 2],
+                   [-1, 0, 1]])
+
+    Gy = np.array([[-1, -2, -1],
+                   [0, 0, 0],
+                   [1, 2, 1]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class ScharrOperator(EdgeDetection):
+
+    Gx = np.array([[-3, 0, 3],
+                   [-10, 0, 10],
+                   [-3, 0, 3]])
+
+    Gy = np.array([[-3, -10, -3],
+                   [0, 0, 0],
+                   [3, 10, 3]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class ScharrFourierOperator(EdgeDetection):
+
+    Gx = np.array([[-47, 0, 47],
+                   [-162, 0, 162],
+                   [-47, 0, 47]])
+
+    Gy = np.array([[-47, -162, -47],
+                   [0, 0, 0],
+                   [47, 162, 47]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class Prewitt3Operator(EdgeDetection):
+
+    Gx = np.array([[1, 0, -1],
+                   [1, 0, -1],
+                   [1, 0, -1]])
+
+    Gy = np.array([[1, 1, 1],
+                   [0, 0, 0],
+                   [-1, -1, -1]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class Prewitt4Operator(EdgeDetection):
+
+    Gx = np.array([[3, 1, -1, -3],
+                   [3, 1, -1, -3],
+                   [3, 1, -1, -3],
+                   [3, 1, -1, -3]])
+
+    Gy = np.array([[3, 3, 3, 3],
+                   [1, 1, 1, 1],
+                   [-1, -1, -1, -1],
+                   [-3, -3, -3, -3]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class RobertsCrossOperator(EdgeDetection):
+
+    Gx = np.array([[1, 0],
+                   [0, -1]])
+
+    Gy = np.array([[0, 1],
+                   [-1, 0]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class KayyaliOperator(EdgeDetection):
+
+    Gx = np.array([[6, 0, -6],
+                   [0, 0, 0],
+                   [-6, 0, 6]])
+
+    Gy = np.array([[-6, 0, 6],
+                   [0, 0, 0],
+                   [6, 0, -6]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+
+class KirschOperator(EdgeDetection):
+    # Implement different directions
+    Gx = np.array([[5, 5, 5],
+                   [-3, 0, -3],
+                   [-3, -3, -3]])
+
+    Gy = np.array([[5, -3, -3],
+                   [5, 0, -3],
+                   [5, -3, -3]])
+
+    def __init__(self, feature, **kwargs):
+        super().__init__(feature, (self.Gx, self.Gy), **kwargs)
+
+# Find a nice way to implement this
+# https://en.wikipedia.org/wiki/Discrete_Laplace_operator
